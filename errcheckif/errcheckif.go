@@ -1,4 +1,4 @@
-package linter
+package errcheckif
 
 import (
 	"go/ast"
