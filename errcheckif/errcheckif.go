@@ -18,19 +18,16 @@ The errcheckif checker ensures that whenever a function call returns an error,
 that error is checked in a subsequent if statement using "err != nil", "err == nil",
 "errors.Is", or "errors.As".`
 
-// init 函数会在该包被导入时自动执行。
-// 它通过 register.Plugin 将我们的 linter 构造函数注册到 golangci-lint 的插件系统中。
+// 通过 register.Plugin 将 linter 构造函数注册到 golangci-lint 的插件系统中
 func init() {
-	// "errcheckif" 是我们在 .golangci.yml 中使用的 linter 名称。
+	// "errcheckif" 是在 .golangci.yml 中使用的 linter 名称
 	register.Plugin("errcheckif", New)
 }
 
-// ErrCheckIfPlugin 实现了 register.LinterPlugin 接口。
-// 我们可以用它来保存从 .golangci.yml 传来的配置，但本次我们不需要配置。
+// ErrCheckIfPlugin 用来保存从 .golangci.yml 传来的配置
 type ErrCheckIfPlugin struct{}
 
-// New 是 linter 的构造函数，golangci-lint 会调用它。
-// 它必须匹配 `func(settings any) (register.LinterPlugin, error)` 这个签名。
+// New 是 linter 的构造函数，golangci-lint 会调用它
 func New(settings any) (register.LinterPlugin, error) {
 	// 如果 linter 需要从 .golangci.yml 中读取配置，可以在这里解码。
 	// 例如: `register.DecodeSettings[MySettings](settings)`
@@ -38,20 +35,19 @@ func New(settings any) (register.LinterPlugin, error) {
 	return &ErrCheckIfPlugin{}, nil
 }
 
-// BuildAnalyzers 返回该插件提供的所有 analysis.Analyzer 实例。
+// BuildAnalyzers 返回该插件提供的所有 analysis.Analyzer 实例
 func (p *ErrCheckIfPlugin) BuildAnalyzers() ([]*analysis.Analyzer, error) {
 	return []*analysis.Analyzer{
 		{
-			Name: "errcheckif",
-			Doc:  doc,
-			// 我们的 linter 需要类型信息，所以要引入 inspect.Analyzer
+			Name:     "errcheckif",
+			Doc:      doc,
 			Requires: []*analysis.Analyzer{inspect.Analyzer},
-			Run:      run, // 运行核心检查逻辑的函数
+			Run:      run, // 核心检查逻辑的函数
 		},
 	}, nil
 }
 
-// GetLoadMode 告诉 golangci-lint 如何加载代码。
+// GetLoadMode 告诉 golangci-lint 如何加载代码
 func (p *ErrCheckIfPlugin) GetLoadMode() string {
 	// 因为我们需要检查变量是否为 `error` 类型，以及 `nil` 的定义，
 	// 所以必须使用 `LoadModeTypesInfo` 来获取完整的类型信息。
@@ -158,7 +154,6 @@ func checkCondition(pass *analysis.Pass, cond ast.Expr, errIdent *ast.Ident) boo
 		if c.Op == token.LOR {
 			return checkCondition(pass, c.X, errIdent) || checkCondition(pass, c.Y, errIdent)
 		}
-		// MODIFICATION: Accept both != and ==
 		if c.Op == token.NEQ || c.Op == token.EQL {
 			if isIdent(pass, c.X, errIdent) && isNil(pass, c.Y) {
 				return true
