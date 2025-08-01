@@ -99,4 +99,14 @@ if errors.As(err, &os.ErrNotExist) {
 
 // 正确 5
 _, _ = mightFail()
+
+// 正确 6 if-init模式
+if _, err = mightFail(); err != nil {
+}
+if _, err = mightFail(); err == nil {
+}
+if _, err = mightFail(); errors.Is(err, os.ErrNotExist) {
+}
+if _, err = mightFail(); errors.As(err, &os.ErrNotExist) {
+}
 ```

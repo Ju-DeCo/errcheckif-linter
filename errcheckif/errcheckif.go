@@ -88,7 +88,13 @@ func run(pass *analysis.Pass) (interface{}, error) {
 			return
 		}
 
-		if !isErrorHandled(pass, errIdent, path) {
+		// 1. 首先检查是否是 if-init 模式
+		if isHandledInIfInit(pass, errIdent, path) {
+			return
+		}
+
+		// 2. 如果不是，再回退到检查后续语句的旧逻辑
+		if !isHandledInSubsequentStatement(pass, errIdent, path) {
 			pass.Reportf(errIdent.Pos(), "error '%s' is not checked with '!= nil', '== nil', 'errors.Is', or 'errors.As'", errIdent.Name)
 		}
 	})
@@ -96,17 +102,65 @@ func run(pass *analysis.Pass) (interface{}, error) {
 	return nil, nil
 }
 
+// isHandledInIfInit 检查错误是否在 if-init 结构中被处理。
+func isHandledInIfInit(pass *analysis.Pass, errIdent *ast.Ident, path []ast.Node) bool {
+	// path[0] 是我们找到的 *ast.AssignStmt
+	// path[1] 是它的直接父节点。我们需要检查父节点是不是一个 *ast.IfStmt
+	if len(path) < 2 {
+		return false
+	}
+
+	ifStmt, ok := path[1].(*ast.IfStmt)
+	if !ok {
+		return false
+	}
+
+	// 确认我们的赋值语句确实是这个 if 语句的 Init 部分
+	if ifStmt.Init != path[0] {
+		return false
+	}
+
+	// 如果是，那么直接检查这个 if 语句的条件 (Cond) 部分
+	return checkCondition(pass, ifStmt.Cond, errIdent)
+}
+
+// isHandledInSubsequentStatement 检查错误是否在后续的独立语句中被处理。
+func isHandledInSubsequentStatement(pass *analysis.Pass, errIdent *ast.Ident, path []ast.Node) bool {
+	for i, node := range path {
+		if block, ok := node.(*ast.BlockStmt); ok {
+			// path[i-1] 是 block 语句列表中的直接子节点
+			if i > 0 {
+				for stmtIdx, stmt := range block.List {
+					if stmt == path[i-1] {
+						// 从当前语句的下一条开始检查
+						for j := stmtIdx + 1; j < len(block.List); j++ {
+							subsequentStmt := block.List[j]
+							if checkIfStmtHandlesError(pass, subsequentStmt, errIdent) {
+								return true
+							}
+							if isIdentifierReassigned(pass, subsequentStmt, errIdent) {
+								return false
+							}
+						}
+						// 在当前块中未找到处理，退出内层循环
+						break
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
 func findReturnedError(pass *analysis.Pass, assign *ast.AssignStmt, call *ast.CallExpr) *ast.Ident {
 	sig, ok := pass.TypesInfo.TypeOf(call.Fun).(*types.Signature)
 	if !ok {
 		return nil
 	}
-
 	results := sig.Results()
 	if results.Len() == 0 {
 		return nil
 	}
-
 	for i := 0; i < results.Len(); i++ {
 		if types.Implements(results.At(i).Type(), errorType) {
 			if i < len(assign.Lhs) {
@@ -117,27 +171,6 @@ func findReturnedError(pass *analysis.Pass, assign *ast.AssignStmt, call *ast.Ca
 		}
 	}
 	return nil
-}
-
-func isErrorHandled(pass *analysis.Pass, errIdent *ast.Ident, path []ast.Node) bool {
-	for i, node := range path {
-		if block, ok := node.(*ast.BlockStmt); ok {
-			for stmtIdx, stmt := range block.List {
-				if i > 0 && stmt == path[i-1] {
-					for j := stmtIdx + 1; j < len(block.List); j++ {
-						subsequentStmt := block.List[j]
-						if checkIfStmtHandlesError(pass, subsequentStmt, errIdent) {
-							return true
-						}
-						if isIdentifierReassigned(pass, subsequentStmt, errIdent) {
-							return false
-						}
-					}
-				}
-			}
-		}
-	}
-	return false
 }
 
 func checkIfStmtHandlesError(pass *analysis.Pass, stmt ast.Node, errIdent *ast.Ident) bool {
