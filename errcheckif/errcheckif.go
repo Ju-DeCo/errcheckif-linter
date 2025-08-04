@@ -59,10 +59,7 @@ var errorType = types.Universe.Lookup("error").Type().Underlying().(*types.Inter
 
 func run(pass *analysis.Pass) (interface{}, error) {
 	inspector := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
-
-	nodeFilter := []ast.Node{
-		(*ast.AssignStmt)(nil),
-	}
+	nodeFilter := []ast.Node{(*ast.AssignStmt)(nil)}
 
 	inspector.Preorder(nodeFilter, func(node ast.Node) {
 		assignStmt, ok := node.(*ast.AssignStmt)
@@ -88,67 +85,71 @@ func run(pass *analysis.Pass) (interface{}, error) {
 			return
 		}
 
-		// 1. 首先检查是否是 if-init 模式
 		if isHandledInIfInit(pass, errIdent, path) {
 			return
 		}
 
-		// 2. 如果不是，再回退到检查后续语句的旧逻辑
 		if !isHandledInSubsequentStatement(pass, errIdent, path) {
-			pass.Reportf(errIdent.Pos(), "error '%s' is not checked with '!= nil', '== nil', 'errors.Is', or 'errors.As'", errIdent.Name)
+			pass.Reportf(errIdent.Pos(), "error '%s' is not checked or returned", errIdent.Name)
 		}
 	})
 
 	return nil, nil
 }
 
-// isHandledInIfInit 检查错误是否在 if-init 结构中被处理。
 func isHandledInIfInit(pass *analysis.Pass, errIdent *ast.Ident, path []ast.Node) bool {
-	// path[0] 是我们找到的 *ast.AssignStmt
-	// path[1] 是它的直接父节点。我们需要检查父节点是不是一个 *ast.IfStmt
 	if len(path) < 2 {
 		return false
 	}
-
 	ifStmt, ok := path[1].(*ast.IfStmt)
-	if !ok {
+	if !ok || ifStmt.Init != path[0] {
 		return false
 	}
-
-	// 确认我们的赋值语句确实是这个 if 语句的 Init 部分
-	if ifStmt.Init != path[0] {
-		return false
-	}
-
-	// 如果是，那么直接检查这个 if 语句的条件 (Cond) 部分
 	return checkCondition(pass, ifStmt.Cond, errIdent)
 }
 
-// isHandledInSubsequentStatement 检查错误是否在后续的独立语句中被处理。
 func isHandledInSubsequentStatement(pass *analysis.Pass, errIdent *ast.Ident, path []ast.Node) bool {
 	for i, node := range path {
 		if block, ok := node.(*ast.BlockStmt); ok {
-			// path[i-1] 是 block 语句列表中的直接子节点
 			if i > 0 {
 				for stmtIdx, stmt := range block.List {
 					if stmt == path[i-1] {
-						// 从当前语句的下一条开始检查
 						for j := stmtIdx + 1; j < len(block.List); j++ {
 							subsequentStmt := block.List[j]
-							if checkIfStmtHandlesError(pass, subsequentStmt, errIdent) {
+							if isStmtAValidHandler(pass, subsequentStmt, errIdent) {
 								return true
 							}
 							if isIdentifierReassigned(pass, subsequentStmt, errIdent) {
 								return false
 							}
 						}
-						// 在当前块中未找到处理，退出内层循环
 						break
 					}
 				}
 			}
 		}
 	}
+	return false
+}
+
+// isStmtAValidHandler 检查一个语句是否是有效的错误处理器 (if 或 return)。
+func isStmtAValidHandler(pass *analysis.Pass, stmt ast.Node, errIdent *ast.Ident) bool {
+	// Case 1: 检查是否是 if 语句
+	if ifStmt, ok := stmt.(*ast.IfStmt); ok {
+		return checkCondition(pass, ifStmt.Cond, errIdent)
+	}
+
+	// Case 2: 检查是否是 return 语句
+	if returnStmt, ok := stmt.(*ast.ReturnStmt); ok {
+		for _, result := range returnStmt.Results {
+			if retIdent, ok := result.(*ast.Ident); ok {
+				if pass.TypesInfo.ObjectOf(retIdent) == pass.TypesInfo.ObjectOf(errIdent) {
+					return true
+				}
+			}
+		}
+	}
+
 	return false
 }
 
@@ -173,14 +174,6 @@ func findReturnedError(pass *analysis.Pass, assign *ast.AssignStmt, call *ast.Ca
 	return nil
 }
 
-func checkIfStmtHandlesError(pass *analysis.Pass, stmt ast.Node, errIdent *ast.Ident) bool {
-	ifStmt, ok := stmt.(*ast.IfStmt)
-	if !ok {
-		return false
-	}
-	return checkCondition(pass, ifStmt.Cond, errIdent)
-}
-
 func checkCondition(pass *analysis.Pass, cond ast.Expr, errIdent *ast.Ident) bool {
 	switch c := cond.(type) {
 	case *ast.BinaryExpr:
@@ -195,7 +188,6 @@ func checkCondition(pass *analysis.Pass, cond ast.Expr, errIdent *ast.Ident) boo
 				return true
 			}
 		}
-
 	case *ast.CallExpr:
 		sel, ok := c.Fun.(*ast.SelectorExpr)
 		if !ok {
@@ -219,7 +211,6 @@ func isIdentifierReassigned(pass *analysis.Pass, stmt ast.Node, errIdent *ast.Id
 	if targetObj == nil {
 		return false
 	}
-
 	reassigned := false
 	ast.Inspect(stmt, func(n ast.Node) bool {
 		assign, ok := n.(*ast.AssignStmt)

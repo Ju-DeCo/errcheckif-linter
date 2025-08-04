@@ -8,6 +8,8 @@
 * `errors.Is(err, ***)`
 * `errors.As(err, ***)`
 
+或者是通过 `return` 进行错误传递。
+
 ## 添加到 golangci-lint
 
 使用[官方](https://golangci-lint.run/plugins/module-plugins/#the-automatic-way)推荐的 `Module Plugin System` 方式
@@ -22,7 +24,7 @@ version: v2.3.0
 plugins:
   - module: 'github.com/Ju-DeCo/errcheckif-linter' #指定仓库地址
     import: 'github.com/Ju-DeCo/errcheckif-linter/errcheckif' #指定包
-    version: v0.1.2 #指定发布版本
+    version: v0.1.4 #指定发布版本
 ```
 
 ### 2. **运行命令生成二进制文件**
@@ -108,5 +110,11 @@ if _, err = mightFail(); err == nil {
 if _, err = mightFail(); errors.Is(err, os.ErrNotExist) {
 }
 if _, err = mightFail(); errors.As(err, &os.ErrNotExist) {
+}
+
+func error_propagation() (string, error) {
+    // 正确 7 错误传递
+    fail, err := mightFail()
+    return fail, err
 }
 ```
