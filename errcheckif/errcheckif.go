@@ -122,30 +122,45 @@ func isHandledInIfInit(pass *analysis.Pass, errIdent *ast.Ident, path []ast.Node
 
 // isHandledInSubsequentStatement 检查错误是否在后续的独立语句中被处理
 func isHandledInSubsequentStatement(pass *analysis.Pass, errIdent *ast.Ident, path []ast.Node) bool {
-	// 遍历从当前节点到根节点的路径
-	for i, node := range path {
-		// 找到包裹我们语句的代码块 (*ast.BlockStmt)
-		if block, ok := node.(*ast.BlockStmt); ok {
-			if i > 0 {
-				for stmtIdx, stmt := range block.List {
-					if stmt == path[i-1] {
-						for j := stmtIdx + 1; j < len(block.List); j++ {
-							subsequentStmt := block.List[j]
-							if isStmtAValidHandler(pass, subsequentStmt, errIdent) {
-								return true
-							}
-							// 如果在被处理之前，这个 error 变量被重新赋值了，那么我们就认为原始的 error 没有被处理，停止检查
-							if isIdentifierReassigned(pass, subsequentStmt, errIdent) {
-								return false
-							}
-						}
-						break
+	for i := 1; i < len(path); i++ {
+		// 尝试从当前父节点获取语句列表
+		stmtList := getStmtList(path[i])
+		if stmtList == nil {
+			continue
+		}
+
+		// 在这个语句列表中，找到我们关心的那个语句（即赋值语句的父语句）
+		for stmtIdx, stmt := range stmtList {
+			if stmt == path[i-1] {
+				for j := stmtIdx + 1; j < len(stmtList); j++ {
+					subsequentStmt := stmtList[j]
+					if isStmtAValidHandler(pass, subsequentStmt, errIdent) {
+						return true
+					}
+					if isIdentifierReassigned(pass, subsequentStmt, errIdent) {
+						return false
 					}
 				}
+				return false
 			}
 		}
 	}
 	return false
+}
+
+// getStmtList 从一个 AST 节点中提取出其包含的语句列表
+// 泛化处理 *ast.BlockStmt, *ast.CaseClause (用于 switch), 和 *ast.CommClause (用于 select)。
+func getStmtList(node ast.Node) []ast.Stmt {
+	switch n := node.(type) {
+	case *ast.BlockStmt:
+		return n.List
+	case *ast.CaseClause:
+		return n.Body
+	// 增加对 select 语句中 case 的处理
+	case *ast.CommClause:
+		return n.Body
+	}
+	return nil
 }
 
 // isStmtAValidHandler 检查一个语句是否有效进行错误处理 (if 或 return)
