@@ -117,4 +117,14 @@ func error_propagation() (string, error) {
     fail, err := mightFail()
     return fail, err
 }
+
+
+// 正确 8 逻辑与 与 逻辑或
+_, err = mightFail()
+if err != nil && err != http.ErrServerClosed {
+}
+
+_, err = mightFail()
+if err != nil || err != http.ErrServerClosed {
+}
 ```

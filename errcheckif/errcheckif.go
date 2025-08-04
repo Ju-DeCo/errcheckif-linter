@@ -202,8 +202,8 @@ func checkCondition(pass *analysis.Pass, cond ast.Expr, errIdent *ast.Ident) boo
 	switch c := cond.(type) {
 	// 情况1: 二元表达式, 如 err != nil
 	case *ast.BinaryExpr:
-		// 如果是逻辑或 || (LOR)，则递归地检查左右两边
-		if c.Op == token.LOR {
+		// 如果是逻辑或 || (LOR) 逻辑与 && (LAND)，则递归地检查左右两边
+		if c.Op == token.LOR || c.Op == token.LAND {
 			return checkCondition(pass, c.X, errIdent) || checkCondition(pass, c.Y, errIdent)
 		}
 		// 如果是 != (NEQ) 或 == (EQL)，检查是不是 err 和 nil 在进行比较
