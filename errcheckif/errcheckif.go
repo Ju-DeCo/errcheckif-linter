@@ -5,6 +5,7 @@ import (
 	"go/token"
 	"go/types"
 	"golang.org/x/tools/go/ast/astutil"
+	"strings"
 
 	"github.com/golangci/plugin-module-register/register"
 	"golang.org/x/tools/go/analysis"
@@ -67,6 +68,16 @@ func run(pass *analysis.Pass) (interface{}, error) { // pass 对象是分析过�
 
 	// 遍历 AST 中的 nodeFilter 的指定节点
 	inspector.Preorder(nodeFilter, func(node ast.Node) {
+
+		// 跳过测试文件的检测
+		pos := node.Pos()
+		// pass.Fset 是一个文件集
+		file := pass.Fset.File(pos)
+		// 获取文件名，以 _test.go 结尾，则直接返回
+		if file != nil && strings.HasSuffix(file.Name(), "_test.go") {
+			return
+		}
+
 		assignStmt, ok := node.(*ast.AssignStmt)
 		if !ok {
 			return

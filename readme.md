@@ -24,7 +24,7 @@ version: v2.3.0
 plugins:
   - module: 'github.com/Ju-DeCo/errcheckif-linter' #指定仓库地址
     import: 'github.com/Ju-DeCo/errcheckif-linter/errcheckif' #指定包
-    version: v0.1.7 #指定发布版本
+    version: v0.1.8 #指定发布版本
 ```
 
 ### 2. **运行命令生成二进制文件**
@@ -127,4 +127,51 @@ if err != nil && err != http.ErrServerClosed {
 _, err = mightFail()
 if err != nil || err != http.ErrServerClosed {
 }
+
+
+// 正确 9 select 与 switch 语句
+ctx := context.Background()
+select {
+case <-ctx.Done():
+    _, e1 := mightFail()
+    if e1 != nil {
+    }
+}
+
+t := 1
+switch t {
+case 1:
+    _, e2 := mightFail()
+    if e2 != nil {
+    }
+}
 ```
+
+
+## 局限性
+
+**控制流误报**
+``` go
+if 1 < 2 {
+    _, err = mightFail()
+} else {
+    _, err = mightFail()
+}
+if err != nil {
+}
+
+```
+
+**并发误报**
+``` go
+go func() {
+    var terr error
+    defer func() {
+        if terr != nil {
+        }
+    }()
+    terr = fail()
+}()
+```
+
+可通过 `nolint:errcheckif` 跳过检测。
