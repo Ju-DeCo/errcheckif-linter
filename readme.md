@@ -38,9 +38,9 @@ golangci-lint custom -v
 
 `custom-gcl.exe`
 
-### 3. **在`.golangci.custom.yaml`中对自定义插件进行定义**
+### 3. **在`.golangci.custom.yaml`中对自定义插件进行配置**
 
-避免使用 `.golangci.yaml` 等官方yaml名称
+避免使用 `.golangci.yaml` 等官方配置文件名
 ``` yaml
 version: "2"
 
@@ -66,7 +66,7 @@ linters:
 golangci-lint cache clean
 
 # custom-gcl为生成的二进制文件名
-# .golangci.custom.yaml为自定义的yaml文件
+# .golangci.custom.yaml为自定义的yaml配置文件
 ./custom-gcl run --config .\.golangci.custom.yaml
 ```
 
@@ -104,51 +104,16 @@ if errors.As(err, &os.ErrNotExist) {
     fmt.Println("file does not exist")
 }
 
-// 正确 5
-_, _ = mightFail()
-
-// 正确 6 if-init模式
-if _, err = mightFail(); err != nil {
-}
-if _, err = mightFail(); err == nil {
-}
-if _, err = mightFail(); errors.Is(err, os.ErrNotExist) {
-}
-if _, err = mightFail(); errors.As(err, &os.ErrNotExist) {
-}
-
 func error_propagation() (string, error) {
-    // 正确 7 错误传递
+    // 正确 5 错误传递
     fail, err := mightFail()
     return fail, err
 }
 
-
-// 正确 8 逻辑与 与 逻辑或
-_, err = mightFail()
-if err != nil && err != http.ErrServerClosed {
-}
-
-_, err = mightFail()
-if err != nil || err != http.ErrServerClosed {
-}
-
-
-// 正确 9 select 与 switch 语句
-ctx := context.Background()
-select {
-case <-ctx.Done():
-    _, e1 := mightFail()
-    if e1 != nil {
-    }
-}
-
-t := 1
-switch t {
-case 1:
-    _, e2 := mightFail()
-    if e2 != nil {
-    }
+// 正确6 裸返回
+func test_naked_return() (err error) {
+    err = errors.New("123")
+    return
 }
 ```
 
