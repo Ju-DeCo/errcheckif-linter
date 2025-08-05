@@ -183,12 +183,33 @@ func isStmtAValidHandler(pass *analysis.Pass, stmt ast.Node, errIdent *ast.Ident
 
 	// Case 2: 检查是否是 return 语句
 	if returnStmt, ok := stmt.(*ast.ReturnStmt); ok {
-		// 遍历 return 语句的所有返回值
+		// 检查是否为显式返回，如 `return err`
 		for _, result := range returnStmt.Results {
-			// 检查返回的表达式是否就是我们追踪的那个 err 变量
-			if retIdent, ok := result.(*ast.Ident); ok {
-				if pass.TypesInfo.ObjectOf(retIdent) == pass.TypesInfo.ObjectOf(errIdent) {
-					return true
+			if isIdent(pass, result, errIdent) {
+				return true
+			}
+		}
+
+		// 如果是裸返回 `return;`，则检查 errIdent 是否为命名返回值
+		if len(returnStmt.Results) == 0 {
+			// 找到包裹此 return 语句的函数声明
+			path, _ := astutil.PathEnclosingInterval(findFile(pass, returnStmt), returnStmt.Pos(), returnStmt.End())
+			if path != nil {
+				for _, node := range path {
+					if funcDecl, ok := node.(*ast.FuncDecl); ok {
+						// 检查函数的命名返回值列表
+						if funcDecl.Type.Results != nil {
+							for _, field := range funcDecl.Type.Results.List {
+								for _, name := range field.Names {
+									// 判断我们追踪的 errIdent 是否是其中之一
+									if isIdent(pass, name, errIdent) {
+										return true
+									}
+								}
+							}
+						}
+						break
+					}
 				}
 			}
 		}

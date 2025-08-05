@@ -10,6 +10,8 @@
 
 或者是通过 `return` 进行错误传递。
 
+默认跳过测试文件（以`_test.go`结尾）。
+
 ## 添加到 golangci-lint
 
 使用[官方](https://golangci-lint.run/plugins/module-plugins/#the-automatic-way)推荐的 `Module Plugin System` 方式
@@ -24,7 +26,7 @@ version: v2.3.0
 plugins:
   - module: 'github.com/Ju-DeCo/errcheckif-linter' #指定仓库地址
     import: 'github.com/Ju-DeCo/errcheckif-linter/errcheckif' #指定包
-    version: v0.1.8 #指定发布版本
+    version: v0.1.9 #指定发布版本
 ```
 
 ### 2. **运行命令生成二进制文件**
@@ -60,6 +62,9 @@ linters:
 执行以下命令进行检测
 
 ```
+# 清除缓存
+golangci-lint cache clean
+
 # custom-gcl为生成的二进制文件名
 # .golangci.custom.yaml为自定义的yaml文件
 ./custom-gcl run --config .\.golangci.custom.yaml
