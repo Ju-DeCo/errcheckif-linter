@@ -8,7 +8,7 @@
 * `errors.Is(err, ***)`
 * `errors.As(err, ***)`
 
-或者是通过 `return` 进行错误传递。
+或者通过 `return` 进行错误传递，不能使用 `_` 对错误进行忽略。
 
 默认跳过测试文件（以`_test.go`结尾）。
 
@@ -26,7 +26,7 @@ version: v2.3.0
 plugins:
   - module: 'github.com/Ju-DeCo/errcheckif-linter' #指定仓库地址
     import: 'github.com/Ju-DeCo/errcheckif-linter/errcheckif' #指定包
-    version: v0.1.9 #指定发布版本
+    version: v0.1.10 #指定发布版本
 ```
 
 ### 2. **运行命令生成二进制文件**
@@ -78,6 +78,10 @@ fmt.Println(err) // 这里仅仅使用，没有检查 err
 
 // 错误 2 (没有使用 err)
 _, err = mightFail()
+
+// 错误 3 直接忽略错误
+_, _ = mightFail()
+_ = fail()
 
 // 正确 1
 _, err = mightFail()

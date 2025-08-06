@@ -58,8 +58,7 @@ func (p *ErrCheckIfPlugin) GetLoadMode() string {
 // 缓存 Go 语言中预定义的 error 接口类型
 var errorType = types.Universe.Lookup("error").Type().Underlying().(*types.Interface)
 
-func run(pass *analysis.Pass) (interface{}, error) { // pass 对象是分析过程的上下文
-
+func run(pass *analysis.Pass) (interface{}, error) {
 	// 获取预先构建好的 inspector 实例
 	inspector := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
 
@@ -68,13 +67,8 @@ func run(pass *analysis.Pass) (interface{}, error) { // pass 对象是分析过�
 
 	// 遍历 AST 中的 nodeFilter 的指定节点
 	inspector.Preorder(nodeFilter, func(node ast.Node) {
-
 		// 跳过测试文件的检测
-		pos := node.Pos()
-		// pass.Fset 是一个文件集
-		file := pass.Fset.File(pos)
-		// 获取文件名，以 _test.go 结尾，则直接返回
-		if file != nil && strings.HasSuffix(file.Name(), "_test.go") {
+		if file := pass.Fset.File(node.Pos()); file != nil && strings.HasSuffix(file.Name(), "_test.go") {
 			return
 		}
 
@@ -82,39 +76,62 @@ func run(pass *analysis.Pass) (interface{}, error) { // pass 对象是分析过�
 		if !ok {
 			return
 		}
-
-		// 赋值语句右侧必须是函数调用
 		if len(assignStmt.Rhs) != 1 {
 			return
 		}
+		// 赋值语句右侧必须是函数调用
 		callExpr, ok := assignStmt.Rhs[0].(*ast.CallExpr)
 		if !ok {
 			return
 		}
 
-		// 检查该函数调用是否返回了 error，并获取 error 变量的标识符（*ast.Ident）
-		errIdent := findReturnedError(pass, assignStmt, callExpr)
-		if errIdent == nil {
+		// 获取函数调用的类型签名
+		sig, ok := pass.TypesInfo.TypeOf(callExpr.Fun).(*types.Signature)
+		if !ok {
+			return
+		}
+		results := sig.Results()
+		if results.Len() == 0 {
 			return
 		}
 
-		// 返回一个从当前节点 (assignStmt) 到 AST 根节点的路径
-		path, _ := astutil.PathEnclosingInterval(findFile(pass, assignStmt), assignStmt.Pos(), assignStmt.End())
-		if path == nil {
-			return
-		}
+		// 遍历所有返回值
+		for i := 0; i < results.Len(); i++ {
+			// 检查当前返回值类型是否实现了 error 接口
+			if !types.Implements(results.At(i).Type(), errorType) {
+				continue
+			}
 
-		// 检查这个赋值是不是一个 if-init 语句的一部分
-		if isHandledInIfInit(pass, errIdent, path) {
-			return
-		}
+			// 如果这是一个 error 返回值，检查它被如何接收
+			if i < len(assignStmt.Lhs) {
+				ident, ok := assignStmt.Lhs[i].(*ast.Ident)
+				if !ok {
+					// Lhs 不是一个简单的标识符，例如 `s.err = ...`，我们暂时忽略这种情况
+					continue
+				}
 
-		// 检查是否在后续的语句中被处理（if 或 return）
-		if !isHandledInSubsequentStatement(pass, errIdent, path) {
-			pass.Reportf(errIdent.Pos(), "error '%s' is not checked or returned", errIdent.Name)
+				if ident.Name == "_" {
+					// 情况A：错误被 `_` 忽略了，直接报错
+					pass.Reportf(ident.Pos(), "error returned from function call is ignored")
+				} else {
+					// 情况B：错误被赋给了一个具名变量，启动我们完整的处理检查逻辑
+					errIdent := ident
+					path, _ := astutil.PathEnclosingInterval(findFile(pass, assignStmt), assignStmt.Pos(), assignStmt.End())
+					if path == nil {
+						continue
+					}
+
+					if isHandledInIfInit(pass, errIdent, path) {
+						continue
+					}
+
+					if !isHandledInSubsequentStatement(pass, errIdent, path) {
+						pass.Reportf(errIdent.Pos(), "error '%s' is not checked or returned", errIdent.Name)
+					}
+				}
+			}
 		}
 	})
-
 	return nil, nil
 }
 
@@ -216,32 +233,6 @@ func isStmtAValidHandler(pass *analysis.Pass, stmt ast.Node, errIdent *ast.Ident
 	}
 
 	return false
-}
-
-// findReturnedError 查找赋值语句右侧的函数调用是否返回 error，并返回对应的左侧变量
-func findReturnedError(pass *analysis.Pass, assign *ast.AssignStmt, call *ast.CallExpr) *ast.Ident {
-	// 获取函数调用的类型签名
-	sig, ok := pass.TypesInfo.TypeOf(call.Fun).(*types.Signature)
-	if !ok {
-		return nil
-	}
-	// 获取返回结果列表
-	results := sig.Results()
-	if results.Len() == 0 {
-		return nil
-	}
-	for i := 0; i < results.Len(); i++ {
-		// types.Implements 检查该返回值的类型是否实现了 error 接口
-		if types.Implements(results.At(i).Type(), errorType) {
-			if i < len(assign.Lhs) {
-				// 如果变量不是 _ (空白标识符)，就返回它
-				if ident, ok := assign.Lhs[i].(*ast.Ident); ok && ident.Name != "_" {
-					return ident
-				}
-			}
-		}
-	}
-	return nil
 }
 
 // checkCondition 检查 if 条件表达式是否满足给定规则
