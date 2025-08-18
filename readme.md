@@ -26,7 +26,7 @@ version: v2.3.0
 plugins:
   - module: 'github.com/Ju-DeCo/errcheckif-linter' #指定仓库地址
     import: 'github.com/Ju-DeCo/errcheckif-linter/errcheckif' #指定包
-    version: v0.1.10 #指定发布版本
+    version: v0.1.11 #指定发布版本
 ```
 
 ### 2. **运行命令生成二进制文件**
@@ -119,22 +119,23 @@ func test_naked_return() (err error) {
     err = errors.New("123")
     return
 }
+
+// 正确7 if-else
+func ttest01(cond bool) {
+    var err error
+    
+    if cond {
+        err = rterr()
+    } else {
+        _, err = os.Open("test.txt")
+    }
+    if err != nil {
+    }
+}
 ```
 
 
 ## 局限性
-
-**控制流误报**
-``` go
-if 1 < 2 {
-    _, err = mightFail()
-} else {
-    _, err = mightFail()
-}
-if err != nil {
-}
-
-```
 
 **并发误报**
 ``` go
@@ -148,4 +149,4 @@ go func() {
 }()
 ```
 
-可通过 `nolint:errcheckif` 跳过检测。
+可通过 `nolint:errcheckif` 跳过检测

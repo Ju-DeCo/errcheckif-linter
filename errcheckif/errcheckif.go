@@ -16,7 +16,8 @@ import (
 const doc = `checks that errors returned from functions are checked
 
 The errcheckif checker ensures that whenever a function call returns an error,
-that error is checked in a subsequent if statement, returned directly, or used in an if-init statement.`
+that error is checked in a subsequent if statement, returned directly, or used in an if-init statement.
+It includes special handling for errors assigned within if-else blocks.`
 
 // 通过 register.Plugin 将 linter 构造函数注册到 golangci-lint 的插件系统中
 func init() {
@@ -55,28 +56,66 @@ func (p *ErrCheckIfPlugin) GetLoadMode() string {
 	return register.LoadModeTypesInfo
 }
 
-// 缓存 Go 语言中预定义的 error 接口类型
-var errorType = types.Universe.Lookup("error").Type().Underlying().(*types.Interface)
+// 缓存预定义的 error 接口类型
+var errorInterface *types.Interface
 
 func run(pass *analysis.Pass) (interface{}, error) {
+
+	if errorInterface == nil {
+		errorType := types.Universe.Lookup("error").Type()
+		if errorType == nil {
+			return nil, nil
+		}
+		var ok bool
+		errorInterface, ok = errorType.Underlying().(*types.Interface)
+		if !ok {
+			return nil, nil
+		}
+	}
+
 	// 获取预先构建好的 inspector 实例
 	inspector := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
 
-	// 指定 只访问 AST 中的赋值语句节点
-	nodeFilter := []ast.Node{(*ast.AssignStmt)(nil)}
+	// --- P1: ifelse linter  ---
+	inspector.Preorder([]ast.Node{(*ast.BlockStmt)(nil)}, func(node ast.Node) {
+		block := node.(*ast.BlockStmt)
+		for i, stmt := range block.List {
+			ifStmt, ok := stmt.(*ast.IfStmt)
+			if !ok || ifStmt.Else == nil {
+				continue
+			}
 
+			errIdent := findCommonErrorVar(pass, ifStmt, errorInterface)
+			if errIdent == nil {
+				continue
+			}
+
+			isHandled := false
+			if i+1 < len(block.List) {
+				// 直接调用errcheck的 isStmtAValidHandler
+				if isStmtAValidHandler(pass, block.List[i+1], errIdent) {
+					isHandled = true
+				}
+			}
+
+			if !isHandled {
+				pass.Reportf(ifStmt.Pos(),
+					"error variable '%s' assigned in if-else block is not checked immediately after",
+					errIdent.Name)
+			}
+		}
+	})
+
+	// --- P2: errcheckif linter ---
 	// 遍历 AST 中的 nodeFilter 的指定节点
-	inspector.Preorder(nodeFilter, func(node ast.Node) {
+	inspector.Preorder([]ast.Node{(*ast.AssignStmt)(nil)}, func(node ast.Node) {
 		// 跳过测试文件的检测
 		if file := pass.Fset.File(node.Pos()); file != nil && strings.HasSuffix(file.Name(), "_test.go") {
 			return
 		}
 
 		assignStmt, ok := node.(*ast.AssignStmt)
-		if !ok {
-			return
-		}
-		if len(assignStmt.Rhs) != 1 {
+		if !ok || len(assignStmt.Rhs) != 1 {
 			return
 		}
 		// 赋值语句右侧必须是函数调用
@@ -90,49 +129,128 @@ func run(pass *analysis.Pass) (interface{}, error) {
 		if !ok {
 			return
 		}
+
 		results := sig.Results()
 		if results.Len() == 0 {
 			return
 		}
 
-		// 遍历所有返回值
 		for i := 0; i < results.Len(); i++ {
-			// 检查当前返回值类型是否实现了 error 接口
-			if !types.Implements(results.At(i).Type(), errorType) {
+			if !types.Implements(results.At(i).Type(), errorInterface) {
 				continue
 			}
 
-			// 如果这是一个 error 返回值，检查它被如何接收
-			if i < len(assignStmt.Lhs) {
-				ident, ok := assignStmt.Lhs[i].(*ast.Ident)
-				if !ok {
-					// Lhs 不是一个简单的标识符，例如 `s.err = ...`，我们暂时忽略这种情况
+			if i >= len(assignStmt.Lhs) {
+				continue
+			}
+
+			ident, ok := assignStmt.Lhs[i].(*ast.Ident)
+			if !ok {
+				// Lhs 不是一个简单的标识符，例如 `s.err = ...`，我们暂时忽略这种情况
+				continue
+			}
+
+			// 错误被 `_` 忽略了，直接报错
+			if ident.Name == "_" {
+				pass.Reportf(ident.Pos(), "error returned from function call is ignored")
+			} else {
+				// 错误被赋给了一个具名变量，启动完整的处理检查逻辑
+				errIdent := ident
+				path, _ := astutil.PathEnclosingInterval(findFile(pass, assignStmt), assignStmt.Pos(), assignStmt.End())
+				if path == nil {
 					continue
 				}
 
-				if ident.Name == "_" {
-					// 情况A：错误被 `_` 忽略了，直接报错
-					pass.Reportf(ident.Pos(), "error returned from function call is ignored")
-				} else {
-					// 情况B：错误被赋给了一个具名变量，启动我们完整的处理检查逻辑
-					errIdent := ident
-					path, _ := astutil.PathEnclosingInterval(findFile(pass, assignStmt), assignStmt.Pos(), assignStmt.End())
-					if path == nil {
-						continue
+				// 跳过if-else结构
+				if len(path) > 2 {
+					if block, ok := path[1].(*ast.BlockStmt); ok {
+						if ifStmt, ok := path[2].(*ast.IfStmt); ok {
+							// 赋值发生在 if 的主体中，且存在 else 分支
+							if block == ifStmt.Body && ifStmt.Else != nil {
+								return
+							}
+							// 赋值发生在 else 的主体中
+							if isElseBlock(ifStmt.Else, block) {
+								return
+							}
+						}
 					}
+				}
 
-					if isHandledInIfInit(pass, errIdent, path) {
-						continue
-					}
+				if isHandledInIfInit(pass, errIdent, path) {
+					continue
+				}
 
-					if !isHandledInSubsequentStatement(pass, errIdent, path) {
-						pass.Reportf(errIdent.Pos(), "error '%s' is not checked or returned", errIdent.Name)
-					}
+				if !isHandledInSubsequentStatement(pass, errIdent, path) {
+					pass.Reportf(errIdent.Pos(), "error '%s' is not checked or returned", errIdent.Name)
 				}
 			}
 		}
 	})
 	return nil, nil
+}
+
+// ==========================  ifelse linter function  =====================================
+func findCommonErrorVar(pass *analysis.Pass, ifStmt *ast.IfStmt, errIface *types.Interface) *ast.Ident {
+	if ifStmt.Body == nil {
+		return nil
+	}
+	var elseBody *ast.BlockStmt
+	switch elseNode := ifStmt.Else.(type) {
+	case *ast.BlockStmt:
+		elseBody = elseNode
+	case *ast.IfStmt:
+		elseBody = elseNode.Body
+	default:
+		return nil
+	}
+
+	errIdentIf := findErrorAssignment(pass, ifStmt.Body, errIface)
+	errIdentElse := findErrorAssignment(pass, elseBody, errIface)
+
+	if errIdentIf != nil && errIdentElse != nil {
+		// 比较它们的类型对象，确保是同一个变量
+		if pass.TypesInfo.ObjectOf(errIdentIf) == pass.TypesInfo.ObjectOf(errIdentElse) {
+			return errIdentIf // 返回其中一个 Ident 即可
+		}
+	}
+	return nil
+}
+
+func findErrorAssignment(pass *analysis.Pass, block *ast.BlockStmt, errIface *types.Interface) *ast.Ident {
+	for _, stmt := range block.List {
+		assign, ok := stmt.(*ast.AssignStmt)
+		if !ok {
+			continue
+		}
+		for _, lhsExpr := range assign.Lhs {
+			ident, ok := lhsExpr.(*ast.Ident)
+			if !ok || ident.Name == "_" {
+				continue
+			}
+			if tv := pass.TypesInfo.TypeOf(ident); tv != nil {
+				if types.Implements(tv, errIface) {
+					return ident // 返回标识符节点
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// ==========================  errcheckif linter function  =====================================
+
+func isElseBlock(elseStmt ast.Stmt, block *ast.BlockStmt) bool {
+	if elseStmt == nil {
+		return false
+	}
+	if b, ok := elseStmt.(*ast.BlockStmt); ok && b == block {
+		return true
+	}
+	if ifStmt, ok := elseStmt.(*ast.IfStmt); ok {
+		return isElseBlock(ifStmt.Else, block) || (ifStmt.Body == block)
+	}
+	return false
 }
 
 // isHandledInIfInit 检测是否是 if-init 模式
