@@ -26,7 +26,7 @@ version: v2.3.0
 plugins:
   - module: 'github.com/Ju-DeCo/errcheckif-linter' #指定仓库地址
     import: 'github.com/Ju-DeCo/errcheckif-linter/errcheckif' #指定包
-    version: v0.1.11 #指定发布版本
+    version: v0.1.12 #指定发布版本
 ```
 
 ### 2. **运行命令生成二进制文件**

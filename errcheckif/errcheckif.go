@@ -91,16 +91,26 @@ func run(pass *analysis.Pass) (interface{}, error) {
 			}
 
 			isHandled := false
-			if i+1 < len(block.List) {
-				// 直接调用errcheck的 isStmtAValidHandler
-				if isStmtAValidHandler(pass, block.List[i+1], errIdent) {
+			// 从 if-else 语句的下一个语句开始，遍历块中所有后续语句
+			for j := i + 1; j < len(block.List); j++ {
+				subsequentStmt := block.List[j]
+
+				// 检查当前语句是否是一个有效的错误处理
+				if isStmtAValidHandler(pass, subsequentStmt, errIdent) {
 					isHandled = true
+					break
+				}
+
+				// 检查 err 变量是否在被处理前被重新赋值
+				// 如果是，那么原始的 error 就被覆盖了，视为未处理
+				if isIdentifierReassigned(pass, subsequentStmt, errIdent) {
+					break
 				}
 			}
 
 			if !isHandled {
 				pass.Reportf(ifStmt.Pos(),
-					"error variable '%s' assigned in if-else block is not checked immediately after",
+					"error variable '%s' assigned in if-else block is not checked",
 					errIdent.Name)
 			}
 		}
