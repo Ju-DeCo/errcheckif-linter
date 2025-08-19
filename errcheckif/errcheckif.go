@@ -81,28 +81,32 @@ func run(pass *analysis.Pass) (interface{}, error) {
 		block := node.(*ast.BlockStmt)
 		for i, stmt := range block.List {
 			ifStmt, ok := stmt.(*ast.IfStmt)
-			if !ok || ifStmt.Else == nil {
+			// 我们只关心有 `else` 且不是 `else if` 的情况
+			if !ok || ifStmt.Else == nil || getBlockStmtFromBody(ifStmt.Else) == nil {
 				continue
 			}
 
-			errIdent := findCommonErrorVar(pass, ifStmt, errorInterface)
-			if errIdent == nil {
+			ifBody := getBlockStmtFromBody(ifStmt.Body)
+			elseBody := getBlockStmtFromBody(ifStmt.Else)
+
+			// 在 if 和 else 分支中分别查找最后一个未被处理的 error
+			errIdentIf := findLastUnhandledError(pass, ifBody, errorInterface)
+			errIdentElse := findLastUnhandledError(pass, elseBody, errorInterface)
+
+			if errIdentIf == nil || errIdentElse == nil || errIdentIf.Name != errIdentElse.Name {
 				continue
 			}
+
+			// 确定有一个共同的、未处理的 err 变量从 if-else 中逃逸出来
+			errIdent := errIdentIf
 
 			isHandled := false
-			// 从 if-else 语句的下一个语句开始，遍历块中所有后续语句
 			for j := i + 1; j < len(block.List); j++ {
 				subsequentStmt := block.List[j]
-
-				// 检查当前语句是否是一个有效的错误处理
 				if isStmtAValidHandler(pass, subsequentStmt, errIdent) {
 					isHandled = true
 					break
 				}
-
-				// 检查 err 变量是否在被处理前被重新赋值
-				// 如果是，那么原始的 error 就被覆盖了，视为未处理
 				if isIdentifierReassigned(pass, subsequentStmt, errIdent) {
 					break
 				}
@@ -201,49 +205,67 @@ func run(pass *analysis.Pass) (interface{}, error) {
 }
 
 // ==========================  ifelse linter function  =====================================
-func findCommonErrorVar(pass *analysis.Pass, ifStmt *ast.IfStmt, errIface *types.Interface) *ast.Ident {
-	if ifStmt.Body == nil {
-		return nil
-	}
-	var elseBody *ast.BlockStmt
-	switch elseNode := ifStmt.Else.(type) {
-	case *ast.BlockStmt:
-		elseBody = elseNode
-	case *ast.IfStmt:
-		elseBody = elseNode.Body
-	default:
+
+// findLastUnhandledError 在一个块中查找最后一个被赋值但未被处理的 error 变量。
+// 只有当一个 error 在块的末尾仍然是未被检查，它才会被返回。
+func findLastUnhandledError(pass *analysis.Pass, block *ast.BlockStmt, errIface *types.Interface) *ast.Ident {
+	if block == nil {
 		return nil
 	}
 
-	errIdentIf := findErrorAssignment(pass, ifStmt.Body, errIface)
-	errIdentElse := findErrorAssignment(pass, elseBody, errIface)
-
-	if errIdentIf != nil && errIdentElse != nil {
-		// 比较它们的类型对象，确保是同一个变量
-		if pass.TypesInfo.ObjectOf(errIdentIf) == pass.TypesInfo.ObjectOf(errIdentElse) {
-			return errIdentIf // 返回其中一个 Ident 即可
-		}
-	}
-	return nil
-}
-
-func findErrorAssignment(pass *analysis.Pass, block *ast.BlockStmt, errIface *types.Interface) *ast.Ident {
-	for _, stmt := range block.List {
+	var lastUnhandledErr *ast.Ident
+	// 遍历块中的所有语句
+	for i, stmt := range block.List {
 		assign, ok := stmt.(*ast.AssignStmt)
 		if !ok {
 			continue
 		}
+
+		// 在赋值语句中找到 error 类型的变量
 		for _, lhsExpr := range assign.Lhs {
 			ident, ok := lhsExpr.(*ast.Ident)
 			if !ok || ident.Name == "_" {
 				continue
 			}
-			if tv := pass.TypesInfo.TypeOf(ident); tv != nil {
-				if types.Implements(tv, errIface) {
-					return ident // 返回标识符节点
+
+			// 检查类型是否是 error
+			if tv := pass.TypesInfo.TypeOf(ident); tv == nil || !types.Implements(tv, errIface) {
+				continue
+			}
+
+			// 找到了一个 error 赋值，现在检查它是否在块的剩余部分被处理了
+			isHandledInBlock := false
+			for j := i + 1; j < len(block.List); j++ {
+				if isStmtAValidHandler(pass, block.List[j], ident) {
+					isHandledInBlock = true
+					break
 				}
 			}
+
+			// 如果这个 error 在块的剩余部分没有被处理，那么它就是当前最后一个未处理的 error
+			if !isHandledInBlock {
+				lastUnhandledErr = ident
+			}
 		}
+	}
+
+	return lastUnhandledErr
+}
+
+// getBlockStmtFromBody 将一个 ast.Stmt (可能是 if.Body 或 if.Else) 转换为 *ast.BlockStmt
+func getBlockStmtFromBody(body ast.Stmt) *ast.BlockStmt {
+	if body == nil {
+		return nil
+	}
+	if block, ok := body.(*ast.BlockStmt); ok {
+		return block
+	}
+	// 处理 else if 的情况: `else if cond {...}`
+	// 在 AST 中这被看作是一个 Stmt = *ast.IfStmt
+	if ifStmt, ok := body.(*ast.IfStmt); ok {
+		// 在这种情况下，我们不认为它是一个独立的块，因为它有自己的条件逻辑
+		_ = ifStmt
+		return nil
 	}
 	return nil
 }
