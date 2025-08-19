@@ -78,6 +78,12 @@ func run(pass *analysis.Pass) (interface{}, error) {
 
 	// --- P1: ifelse linter  ---
 	inspector.Preorder([]ast.Node{(*ast.BlockStmt)(nil)}, func(node ast.Node) {
+
+		// 跳过测试文件的检测
+		if file := pass.Fset.File(node.Pos()); file != nil && strings.HasSuffix(file.Name(), "_test.go") {
+			return
+		}
+
 		block := node.(*ast.BlockStmt)
 		for i, stmt := range block.List {
 			ifStmt, ok := stmt.(*ast.IfStmt)
